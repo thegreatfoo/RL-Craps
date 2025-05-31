@@ -1,0 +1,116 @@
+import gym
+import numpy as np
+import random
+from concurrent.futures import ThreadPoolExecutor
+
+# Gym-compatible Craps environment
+class CrapsEnv(gym.Env):
+    def __init__(self, bankroll=1000):
+        super().__init__()
+        self.bankroll = bankroll
+        self.point = None
+        self.active_bets = {}
+        self.action_space = gym.spaces.MultiDiscrete([100]*20)  # Simplified for example
+        self.observation_space = gym.spaces.Dict({
+            'bankroll': gym.spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32),
+            'point': gym.spaces.Discrete(13),
+            'active_bets': gym.spaces.Box(low=0, high=np.inf, shape=(20,), dtype=np.float32)
+        })
+
+    def reset(self):
+        self.bankroll = 1000
+        self.point = None
+        self.active_bets = {}
+        return self.get_state()
+
+    def step(self, action):
+        total_bet = self.process_bets(action)
+        dice_sum, dice = self.roll_dice()
+        payouts, bets_resolved = self.resolve_bets(dice_sum, dice)
+        reward = sum(payouts.values()) - total_bet
+        self.bankroll += reward
+        done = self.bankroll <= 0
+        info = {'bankroll': self.bankroll, 'bets_resolved': bets_resolved}
+        return self.get_state(), reward, done, info
+
+    def get_state(self):
+        return {
+            'bankroll': np.array([self.bankroll]),
+            'point': self.point if self.point else 0,
+            'active_bets': np.array(list(self.active_bets.values()) + [0]*(20 - len(self.active_bets)))
+        }
+
+    def roll_dice(self):
+        dice = (random.randint(1, 6), random.randint(1, 6))
+        return sum(dice), dice
+
+    def process_bets(self, action):
+        total_bet = sum(action)
+        self.active_bets = {f'bet_{i}': action[i] for i in range(len(action)) if action[i] > 0}
+        return total_bet
+
+    def resolve_bets(self, dice_sum, dice):
+        payouts = {}
+        bets_resolved = {}
+        # Placeholder implementation
+        for bet, amount in self.active_bets.items():
+            payouts[bet] = amount * random.choice([-1, 0, 1])
+            bets_resolved[bet] = True
+        self.active_bets.clear()
+        return payouts, bets_resolved
+
+# Genetic algorithm functions
+
+def evaluate_agent(agent_params, reward_func, episodes=100):
+    env = CrapsEnv()
+    total_reward = 0
+    for _ in range(episodes):
+        done = False
+        state = env.reset()
+        episode_reward = 0
+        while not done:
+            action = agent_policy(state, agent_params)
+            state, reward, done, info = env.step(action)
+            episode_reward += reward
+        total_reward += reward_func(episode_reward)
+    return total_reward / episodes
+
+def agent_policy(state, params):
+    return np.clip(params.astype(int), 0, 100)
+
+def crossover(parent1, parent2):
+    child = np.where(np.random.rand(len(parent1)) < 0.5, parent1, parent2)
+    return child
+
+def mutate(agent, rate=0.05):
+    mutation = np.random.randn(*agent.shape) * rate
+    return agent + mutation
+
+# Reward functions
+
+def reward_most_wins(total_money):
+    return total_money
+
+# Training loop
+
+def train(population_size=30, generations=100, reward_func=reward_most_wins):
+    population = [np.random.rand(20) * 100 for _ in range(population_size)]
+    for generation in range(generations):
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            scores = list(executor.map(lambda p: evaluate_agent(p, reward_func), population))
+
+        sorted_population = [agent for _, agent in sorted(zip(scores, population), reverse=True)]
+        best_score = max(scores)
+        print(f"Generation {generation}, Best Score: {best_score}")
+
+        survivors = sorted_population[:population_size // 5]
+        next_gen = survivors.copy()
+        while len(next_gen) < population_size:
+            p1, p2 = random.sample(survivors, 2)
+            child = mutate(crossover(p1, p2))
+            next_gen.append(child)
+
+        population = next_gen
+
+if __name__ == "__main__":
+    train(population_size=50, generations=200, reward_func=reward_most_wins)
